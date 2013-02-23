@@ -3,7 +3,7 @@
 -export([main/1]).
 
 -define(BUFSIZE, 1048576).
--define(FILEMODE, [raw, read, {read_ahead, ?BUFSIZE}]).
+-define(FILEMODE, [raw, binary, read, {read_ahead, ?BUFSIZE}]).
 
 -define(SPACE, 32).
 -define(LOWERCASE_DELTA, 32).
@@ -20,7 +20,7 @@ fold_lines(Io, Map, Reduce, Acc) ->
     end.
 
 map(Line) ->
-    string:tokens(sanitize(Line), " ").
+    [ W || W <- binary:split(sanitize(Line), <<$ >>, [global]), W =/= <<>> ].
 
 reduce(Words, Freq) ->
     lists:foldl(fun (W, D) -> dict:update_counter(W, 1, D) end, Freq, Words).
@@ -35,9 +35,10 @@ do_top(_, []) -> ok;
 do_top(N, [{_, {W, C}}|T]) -> io:format("~s: ~w~n", [W, C]), do_top(N-1, T).
 
 sanitize(Line) ->
-    lists:map(fun (C) when C <  $A -> ?SPACE;
-                  (C) when C =< $Z -> C + ?LOWERCASE_DELTA;
-                  (C) when C <  $a -> ?SPACE;
-                  (C) when C =< $z -> C;
-                  (_)              -> ?SPACE
-              end, Line).
+    << <<(sanitize_char(C)):8>> || <<C>> <= Line >>.
+
+sanitize_char(C) when C <  $A -> ?SPACE;
+sanitize_char(C) when C =< $Z -> C + ?LOWERCASE_DELTA;
+sanitize_char(C) when C <  $a -> ?SPACE;
+sanitize_char(C) when C =< $z -> C;
+sanitize_char(_)              -> ?SPACE.
