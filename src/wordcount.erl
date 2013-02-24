@@ -14,7 +14,18 @@ main(FileName) ->
     spawn_link(fun () ->
                        %% one process is reading the file
                        {ok, Io} = file:open(FileName, ?FILEMODE),
-                       fold_lines(Io, Mgr, fun map/4, fun reduce/2, Freq, 0)
+                       Process =
+                           fun (Line) ->
+                                   %% each line is mapped and reduced in a
+                                   %% separate process, all update the shared
+                                   %% state in ets
+                                   spawn_link(fun () ->
+                                           process(Line, Freq),
+                                           Mgr ! mapper_done
+                                   end)
+                           end,
+                       LineCount = foreach_lines(Io, Process),
+                       Mgr ! {total_lines, LineCount}
                end),
     loop(Freq, 0, undefined).
 
@@ -24,28 +35,25 @@ loop(Freq, Done, Total) when Done =:= Total ->
 loop(Freq, Done, Total) ->
     receive
         {total_lines, N} -> loop(Freq, Done    , N);
-        {mapper_done, _} -> loop(Freq, Done + 1, Total);
+        mapper_done      -> loop(Freq, Done + 1, Total);
         _                -> loop(Freq, Done    , Total)
     end.
 
-fold_lines(Io, Mgr, Map, Reduce, Acc, Count) ->
+foreach_lines(Io, Fun) ->
+    foreach_lines(Io, Fun, 0).
+
+foreach_lines(Io, Process, Count) ->
     case file:read_line(Io) of
         {ok, Line} ->
-            spawn_link(fun () -> Map(Line, Reduce, Acc, Mgr) end),
-            fold_lines(Io, Mgr, Map, Reduce, Acc, Count+1);
+            Process(Line),
+            foreach_lines(Io, Process, Count+1);
         eof ->
-            Mgr ! {total_lines, Count},
-            Acc
+            Count
     end.
 
-%% each line is mapped and reduced in a separate process, all update
-%% the shared state in ets
-map(Line, Reduce, Freq, Mgr) ->
-    Reduce(string:tokens(sanitize(Line), " "), Freq),
-    Mgr ! {mapper_done, self()}.
-
-reduce(Words, Freq) ->
-    lists:foldl(fun (W, D) -> update_counter(W, D) end, Freq, Words).
+process(Line, Freq) ->
+    Words = string:tokens(sanitize(Line), " "),
+    lists:foreach(fun (W) -> update_counter(W, Freq) end, Words).
 
 top(N, Freq) ->
     L = [ {-C, {W, C}} || [{W, C}] <- ets:match(Freq, '$1') ],
